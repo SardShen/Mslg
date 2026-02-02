@@ -629,7 +629,7 @@
                 const scoring = reactive({
                     winnerIdx: -1,
                     basePoints: 10,
-                    multiplier: 3,
+                    multiplier: 1,
                     bystanderIndices: [],
                     nextDealerIdx: 0
                 });
@@ -988,7 +988,7 @@
                         scoring.multiplier = 0;
                     } else {
                         scoring.basePoints = 10;
-                        scoring.multiplier = 3;
+                        scoring.multiplier = 1;
                     }
                     scoring.bystanderIndices = [];
                     scoring.winnerIdx = -1;
