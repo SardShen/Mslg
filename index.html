@@ -1,0 +1,1550 @@
+
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>麻神理工 - 麻将计分</title>
+    
+    <!-- Libraries -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+
+    <!-- Tailwind Config for Custom Colors -->
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        mj: {
+                            green: '#14532d', // Deep Table Green
+                            surface: '#166534', // Lighter Green Surface
+                            ivory: '#fffbeb', // Tile Color
+                            gold: '#f59e0b', // Dealer/Win
+                            red: '#b91c1c', // Positive
+                            emerald: '#047857', // Negative
+                        }
+                    },
+                    fontFamily: {
+                        serif: ['ui-serif', 'Georgia', 'Cambria', "Times New Roman", 'Times', 'serif'],
+                    }
+                }
+            }
+        }
+    </script>
+
+    <style>
+        body {
+            background-color: #14532d; /* Fallback */
+            -webkit-tap-highlight-color: transparent;
+            overscroll-behavior-y: contain;
+        }
+        .modal-scroll {
+            -webkit-overflow-scrolling: touch;
+            overscroll-behavior: contain;
+            padding-bottom: calc(4.5rem + env(safe-area-inset-bottom));
+        }
+        /* Mahjong Tile Effect */
+        .mj-card {
+            background-color: #fffbeb;
+            border-radius: 0.5rem;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.5), 0 2px 4px -1px rgba(0, 0, 0, 0.3), inset 0 -4px 0 0 rgba(0,0,0,0.1);
+        }
+        .mj-shadow-text {
+            text-shadow: 0 1px 2px rgba(0,0,0,0.5);
+        }
+        /* Custom Scrollbar for history */
+        .history-scroll::-webkit-scrollbar {
+            width: 4px;
+        }
+        .history-scroll::-webkit-scrollbar-track {
+            background: rgba(0,0,0,0.1);
+        }
+        .history-scroll::-webkit-scrollbar-thumb {
+            background: rgba(255,255,255,0.3);
+            border-radius: 2px;
+        }
+        @keyframes slide-up {
+            from { transform: translateY(100%); }
+            to { transform: translateY(0); }
+        }
+        @keyframes fade-in {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
+        .animate-slide-up {
+            animation: slide-up 0.3s ease-out;
+        }
+        .animate-fade-in {
+            animation: fade-in 0.2s ease-out;
+        }
+    </style>
+</head>
+<body class="bg-mj-green text-slate-900 h-screen overflow-hidden flex flex-col font-sans">
+
+    <div id="app" class="h-full flex flex-col w-full max-w-md mx-auto relative">
+        
+        <!-- ================= SETUP VIEW ================= -->
+        <div v-if="state.step === 'setup'" class="flex-1 flex flex-col p-6 space-y-6 justify-start overflow-y-auto">
+            <div class="text-center space-y-2 py-4">
+                <div class="text-6xl">🀄️</div>
+                <h1 class="text-4xl font-serif font-black text-mj-ivory tracking-widest mj-shadow-text">麻神理工</h1>
+                <p class="text-green-200 text-sm">点击名字选定4位牌友</p>
+            </div>
+
+            <!-- Player Selection Grid -->
+            <div class="grid grid-cols-2 gap-4">
+                <button 
+                    v-for="name in state.allNames" 
+                    :key="name"
+                    @click="togglePlayerSelection(name)"
+                    :class="state.selectedNames.includes(name) ? 'ring-4 ring-mj-gold bg-mj-ivory transform scale-105' : 'bg-green-800 text-green-200 opacity-80'"
+                    class="p-4 rounded-xl text-lg font-bold shadow-lg transition-all duration-200 relative truncate"
+                >
+                    {{ name }}
+                    <span v-if="state.selectedNames.includes(name)" class="absolute top-1 right-1 text-mj-gold text-xs">✔</span>
+                </button>
+            </div>
+
+            <div class="space-y-4">
+                <!-- Add Player Section -->
+                <div class="flex space-x-2 pt-2">
+                    <input 
+                        v-model="newPlayerName" 
+                        @keyup.enter="addNewPlayer"
+                        placeholder="添加新牌友..." 
+                        class="flex-1 p-3 rounded-xl bg-mj-ivory text-mj-green font-bold border-2 border-green-700 focus:outline-none placeholder-green-800/50 text-sm"
+                    >
+                    <button 
+                        @click="addNewPlayer"
+                        class="bg-mj-gold text-black font-black px-5 rounded-xl shadow-lg active:scale-95 transition-all text-sm"
+                    >
+                        添加
+                    </button>
+                </div>
+
+                <!-- Start Game Button -->
+                <button 
+                    @click="startGame"
+                    :disabled="state.selectedNames.length !== 4"
+                    class="w-full py-4 bg-mj-ivory text-mj-green font-bold text-xl rounded-xl shadow-xl disabled:opacity-50 disabled:cursor-not-allowed transition hover:bg-white active:scale-95"
+                >
+                    {{ state.history.length > 0 ? '重排并开始' : '正式开局' }}
+                </button>
+            </div>
+            
+            <!-- Game History Section -->
+            <div class="pt-4">
+                <button 
+                    @click="showHistory = !showHistory"
+                    class="w-full py-3 bg-green-800/50 text-green-200 font-bold rounded-xl shadow-lg hover:bg-green-700/50 transition-all text-sm flex justify-between items-center"
+                >
+                    <span>📜 历史游戏记录</span>
+                    <span>{{ showHistory ? '▼' : '▶' }}</span>
+                </button>
+                
+                <div v-if="showHistory" class="mt-3 space-y-3 max-h-60 overflow-y-auto pr-2">
+                    <div 
+                        v-for="game in gameHistoryList" 
+                        :key="game.id"
+                        class="bg-green-900/50 p-3 rounded-lg border border-green-700 cursor-pointer hover:bg-green-800/50 transition-all"
+                        @click="openGameHistoryDetail(game)"
+                    >
+                        <div class="flex justify-between items-center mb-1">
+                            <span class="text-mj-gold font-bold text-sm">{{ formatGameTime(game.timestamp) }}</span>
+                            <span class="text-green-300 text-xs">共{{ game.totalHands }}局</span>
+                        </div>
+                        <div class="flex justify-between items-center">
+                            <span class="text-green-200 text-xs">{{ game.players.join(', ') }}</span>
+                            <span class="text-mj-ivory text-xs font-bold">查看详情</span>
+                        </div>
+                    </div>
+                    <div v-if="gameHistoryList.length === 0" class="text-center text-green-400 text-xs py-4">
+                        暂无历史游戏记录
+                    </div>
+                </div>
+            </div>
+            
+            <div class="flex flex-col space-y-2 pb-10">
+                <div v-if="state.history.length > 0" class="text-center text-green-400 text-xs">当前已累计记录 {{ state.totalHands - 1 }} 局数据</div>
+                <button @click="confirmHardReset" class="text-red-400 text-xs underline text-center opacity-70 hover:opacity-100">
+                    清除所有记录并彻底重置
+                </button>
+            </div>
+        </div>
+
+        <!-- ================= GAME VIEW ================= -->
+        <div v-else class="flex flex-col h-full overflow-hidden">
+            
+            <!-- Header -->
+            <header class="bg-green-900/90 p-3 flex justify-between items-center shadow-lg z-20 border-b border-green-800 shrink-0">
+                <div class="flex items-center space-x-2">
+                    <div 
+                        @click="toggleRoundWind"
+                        class="w-16 h-16 bg-mj-ivory rounded flex items-center justify-center font-serif text-4xl font-bold text-black border-2 border-green-700 cursor-pointer hover:bg-white active:scale-95 transition-all"
+                    >
+                        {{ windChar[state.roundWindIdx] }}
+                    </div>
+                    <div class="flex flex-col">
+                        <span class="text-mj-gold font-bold text-lg uppercase tracking-wider">当前圈风</span>
+                        <span class="text-green-100 text-lg">第 {{ state.totalHands }} 局</span>
+                    </div>
+                </div>
+                <div class="flex space-x-2">
+                    <button 
+                        @click="triggerResetToSetup" 
+                        class="px-6 py-3 bg-mj-gold hover:bg-yellow-400 text-black text-lg font-black rounded shadow-lg active:scale-95 transition-all transform z-30"
+                    >
+                        重排
+                    </button>
+                </div>
+            </header>
+
+            <!-- Main Table Area -->
+            <main class="px-4 py-3 mt-2 mb-3 flex flex-col justify-start relative overflow-hidden shrink-0">
+                <div class="grid grid-cols-2 gap-4 mb-6">
+                    <div 
+                        v-for="(player, idx) in state.players" 
+                        :key="player.id"
+                        class="mj-card p-3 relative flex flex-col justify-between min-h-[120px] transition-all duration-300"
+                        :class="{'ring-4 ring-mj-gold': state.dealerIdx === idx}"
+                    >
+                        <div v-if="state.dealerIdx === idx" class="absolute -top-3 -right-3 bg-mj-gold text-white w-8 h-8 rounded-full flex items-center justify-center shadow text-lg border-2 border-white z-10">
+                            👑
+                        </div>
+                        
+                        <div class="absolute top-1 left-2 text-gray-500 text-xs font-bold">
+                            总: {{ state.playerTotals[player.name] || 0 }}
+                        </div>
+
+                        <div class="absolute top-1 right-2 text-gray-400 text-xs font-bold">
+                            {{ getSeatWind(idx) }}
+                        </div>
+
+                        <div class="text-center mt-2 font-bold text-lg text-slate-800 truncate">
+                            {{ player.name }}
+                        </div>
+
+                        <div class="text-center font-mono text-3xl font-black tracking-tight"
+                             :class="player.roundScore >= 0 ? 'text-mj-red' : 'text-mj-emerald'">
+                            {{ player.roundScore > 0 ? '+' : ''}}{{ player.roundScore }}
+                        </div>
+                    </div>
+                </div>
+
+                <div class="grid grid-cols-2 gap-4">
+                    <button 
+                        @click="openScoringModal('win')"
+                        class="bg-gradient-to-br from-mj-gold to-orange-600 text-white font-bold text-2xl py-5 rounded-xl shadow-lg active:scale-95 transition-transform flex items-center justify-center space-x-2 border-b-4 border-orange-800"
+                    >
+                        <span>🀄️</span>
+                        <span>胡牌结算</span>
+                    </button>
+                    <button 
+                        @click="openScoringModal('end')"
+                        class="bg-green-800 text-green-200 font-bold text-xl py-5 rounded-xl shadow-lg border border-green-700 active:scale-95 transition-transform flex items-center justify-center border-b-4 border-green-950"
+                    >
+                        <span>📊</span>
+                        <span>结束对局</span>
+                    </button>
+                </div>
+            </main>
+
+            <!-- Bottom Section (Tabs: Chart & History) -->
+            <div class="bg-green-800/30 backdrop-blur-sm border-t border-green-800 flex flex-col h-1/3 min-h-[220px] shrink-0">
+                <div class="flex border-b border-green-800/50 shrink-0">
+                    <button @click="activeTab = 'chart'" :class="activeTab === 'chart' ? 'text-mj-ivory bg-green-800/50 border-b-2 border-mj-gold' : 'text-green-400'" class="flex-1 py-2 text-sm font-bold transition-all">走势图</button>
+                    <button @click="activeTab = 'history'" :class="activeTab === 'history' ? 'text-mj-ivory bg-green-800/50 border-b-2 border-mj-gold' : 'text-green-400'" class="flex-1 py-2 text-sm font-bold transition-all">历史记录</button>
+                </div>
+
+                <div class="flex-1 relative p-2 overflow-hidden flex flex-col">
+                    <!-- Chart Area -->
+                    <div v-show="activeTab === 'chart'" class="flex-1 relative w-full h-full bg-black/10 rounded-lg p-2 min-h-0 flex flex-col">
+                        <div class="flex-1 relative min-h-0 w-full">
+                            <canvas ref="scoreChartRef"></canvas>
+                        </div>
+                        <div v-if="state.history.length === 0" class="absolute inset-0 flex items-center justify-center text-green-500 text-sm italic">
+                            暂无积分走势，请先开始对局
+                        </div>
+                    </div>
+
+                    <!-- History Area -->
+                    <div v-show="activeTab === 'history'" class="flex-1 overflow-y-auto history-scroll space-y-2 p-1 min-h-0" @click="deleteConfirmIdx = -1">
+                        <div v-for="(log, idx) in reversedHistory" :key="idx" class="bg-green-900/80 p-2 rounded border-l-4 border-mj-gold text-sm flex justify-between items-center">
+                            <div class="flex-1 mr-2">
+                                <div class="flex items-center">
+                                    <div class="text-green-100 w-12 flex-shrink-0 text-xs opacity-70">#{{ log.hand }}</div>
+                                    <div class="text-mj-ivory">
+                                        <span v-if="log.type === 'draw'" class="text-gray-400 font-bold">流局</span>
+                                    <span v-else-if="log.type === 'end'" class="text-mj-gold font-bold">结束对局</span>
+                                    <span v-else>
+                                        <span class="text-mj-gold font-bold">{{ log.winner }}</span>
+                                        <span class="text-red-400 font-mono ml-1">+{{ log.points }}</span>
+                                    </span>
+                                    </div>
+                                </div>
+                                <div class="text-xs text-green-300 mt-1 ml-12">{{ log.detail }}</div>
+                            </div>
+                            <button 
+                                v-if="deleteConfirmIdx !== idx"
+                                @click.stop="startDelete(idx)" 
+                                class="text-red-400 hover:text-red-300 text-xs font-bold transition-colors px-2 py-1 rounded hover:bg-red-900/20 whitespace-nowrap"
+                            >
+                                删除
+                            </button>
+                            <button 
+                                v-else
+                                @click.stop="confirmDelete(idx)" 
+                                class="text-red-600 hover:text-red-500 text-xs font-bold transition-colors px-2 py-1 rounded bg-red-900/40 border border-red-600 whitespace-nowrap"
+                            >
+                                确认
+                            </button>
+                        </div>
+                        <div v-if="state.history.length === 0" class="text-center text-green-500 py-4 text-sm">暂无对局记录</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ================= SCORING MODAL ================= -->
+        <div v-if="showModal" class="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-end sm:items-center justify-center animate-fade-in">
+            <div class="bg-mj-ivory w-full max-w-md rounded-t-2xl sm:rounded-2xl p-6 shadow-2xl animate-slide-up flex flex-col overflow-y-auto modal-scroll" style="max-height: 90vh; max-height: 90dvh;">
+                <div class="flex justify-between items-center mb-6">
+                    <h2 class="text-2xl font-bold text-mj-green">{{ modalMode === 'end' ? '结束对局' : '胡牌结算' }}</h2>
+                    <button @click="closeModal" class="text-gray-500 hover:text-gray-800 text-4xl leading-none">&times;</button>
+                </div>
+
+                <div v-if="modalMode === 'win'" class="space-y-6">
+                    <div>
+                        <label class="block text-sm font-bold text-gray-500 mb-2 uppercase">赢家</label>
+                        <div class="grid grid-cols-2 gap-2">
+                            <button 
+                                v-for="(player, idx) in state.players" 
+                                :key="idx"
+                                @click="scoring.winnerIdx = idx"
+                                :class="scoring.winnerIdx === idx ? 'bg-mj-red text-white ring-2 ring-red-300' : 'bg-white text-gray-700 border border-gray-200'"
+                                class="p-3 rounded-lg font-bold transition-all truncate"
+                            >
+                                {{ player.name }}
+                                <span v-if="state.dealerIdx === idx" class="ml-1 text-xs">👑</span>
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="w-full">
+                    <label class="block text-sm font-bold text-gray-500 mb-2 uppercase">本回得分（ 台数 X 倍数 )</label>
+                    <div class="relative bg-white border-2 border-gray-300 rounded-lg focus-within:border-mj-green transition-colors overflow-hidden w-full">
+                        <div class="flex items-center w-full">
+                            <input 
+                                type="number" 
+                                inputmode="numeric" 
+                                v-model.number="scoring.basePoints" 
+                                placeholder="10"
+                                class="flex-1 text-lg sm:text-2xl font-mono font-bold p-2 sm:p-3 focus:outline-none text-center min-w-0"
+                            >
+                            <div class="text-lg sm:text-xl font-bold text-gray-500 px-1 sm:px-2 whitespace-nowrap">×</div>
+                            <input 
+                                type="number" 
+                                inputmode="numeric" 
+                                v-model.number="scoring.multiplier" 
+                                placeholder="3"
+                                class="flex-1 text-lg sm:text-2xl font-mono font-bold p-2 sm:p-3 focus:outline-none text-center min-w-0"
+                            >
+                        </div>
+                    </div>
+                </div>
+
+                    <div>
+                        <label class="block text-sm font-bold text-gray-500 mb-2 uppercase">盖牌看戏</label>
+                        <div class="grid grid-cols-2 gap-2">
+                            <button 
+                                v-for="(player, idx) in state.players" 
+                                :key="'by'+idx"
+                                @click="toggleBystander(idx)"
+                                :disabled="scoring.winnerIdx === idx"
+                                :class="[scoring.bystanderIndices.includes(idx) ? 'bg-gray-600 text-white' : 'bg-gray-100 text-gray-400', scoring.winnerIdx === idx ? 'opacity-20 cursor-not-allowed' : '']"
+                                class="p-2 rounded text-sm font-bold transition-colors border border-transparent truncate"
+                            >
+                                {{ player.name }}
+                            </button>
+                        </div>
+                    </div>
+
+                    <div v-if="isValidScore" class="bg-green-50 p-3 rounded border border-green-200">
+                    <div class="flex justify-between text-sm mb-1">
+                        <span class="font-bold text-mj-green">单局得分:</span>
+                        <span class="font-mono text-mj-gold font-bold">{{ scoring.basePoints }} × {{ scoring.multiplier }} = {{ scoring.basePoints * scoring.multiplier }}</span>
+                    </div>
+                    <div class="flex justify-between text-sm mb-1">
+                        <span class="font-bold text-mj-green">赢家 (实收): {{ getPlayerName(scoring.winnerIdx) }}</span>
+                        <span class="font-mono text-mj-red font-bold">+{{ loserShare * activeLoserCount }}</span>
+                    </div>
+                    <div class="flex justify-between text-sm">
+                        <span class="text-gray-600">输家 ({{ activeLoserCount }}人):</span>
+                        <span class="font-mono text-mj-emerald font-bold">-{{ loserShare }} /人</span>
+                    </div>
+                    <div v-if="(scoring.basePoints * scoring.multiplier) != loserShare" class="text-xs text-orange-500 text-right mt-1">* 舍去小数位，实际单局得分调整为 {{ loserShare }}</div>
+                </div>
+                </div>
+
+                <div v-if="modalMode === 'end'" class="space-y-6">
+                    <div>
+                        <label class="block text-sm font-bold text-gray-500 mb-2 uppercase">最终成绩</label>
+                        <!-- 玩家成绩展示卡片（复用游戏主界面样式） -->
+                        <div class="grid grid-cols-2 gap-4">
+                            <div 
+                                v-for="(player, idx) in state.players" 
+                                :key="player.id"
+                                class="mj-card p-3 relative flex flex-col justify-between min-h-[100px] transition-all duration-300 border border-gray-100"
+                            >
+                                <div class="absolute top-1 left-2 text-gray-400 text-xs font-bold">
+                                    {{ getSeatWind(idx) }}
+                                </div>
+
+                                <div class="text-center mt-2 font-bold text-lg text-slate-800 truncate">
+                                    {{ player.name }}
+                                </div>
+
+                                <div class="text-center font-mono text-2xl font-black tracking-tight"
+                                     :class="(state.playerTotals[player.name] || 0) >= 0 ? 'text-mj-red' : 'text-mj-emerald'">
+                                    {{ (state.playerTotals[player.name] || 0) > 0 ? '+' : ''}}{{ state.playerTotals[player.name] || 0 }}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="bg-yellow-50 p-4 rounded border border-yellow-200">
+                        <div class="text-sm font-bold text-yellow-700 mb-3">📋 结算说明</div>
+                        <div v-if="endGameSettlementDetails.length > 0" class="space-y-2">
+                            <div v-for="(detail, idx) in endGameSettlementDetails" :key="idx" class="flex items-center justify-between py-2 border-b border-yellow-100 last:border-0 text-sm sm:text-base">
+                                <span class="font-bold text-gray-700 flex-1 truncate text-right">{{ detail.name }}</span>
+                                <span class="text-sm text-gray-500 mx-2 flex-shrink-0">→</span>
+                                <span class="font-bold text-mj-gold flex-1 truncate text-left">{{ detail.to }}</span>
+                                <span class="font-mono font-bold text-mj-emerald ml-2 flex-shrink-0 w-16 text-left">-{{ detail.amount }}</span>
+                            </div>
+                        </div>
+                        <div v-else class="text-center text-yellow-500 py-4">
+                            当前无需结算，所有积分已平衡
+                        </div>
+                    </div>
+
+                    <div class="bg-white p-4 rounded border border-gray-200">
+                        <div class="flex justify-between items-center mb-3">
+                            <div class="text-sm font-bold text-mj-green">📈 积分走势</div>
+                            <button @click="toggleChartFullscreen" class="text-gray-500 hover:text-gray-700 text-sm">
+                                ⛶ 全屏
+                            </button>
+                        </div>
+                        <div class="h-48 relative">
+                            <canvas ref="endGameChartRef"></canvas>
+                            <button 
+                                v-if="chartFullscreen" 
+                                @click.stop="toggleChartFullscreen" 
+                                class="absolute top-4 right-4 bg-black/30 text-white rounded-full w-10 h-10 flex items-center justify-center backdrop-blur-sm z-50 border border-white/30 active:bg-black/50 transition-colors"
+                            >
+                                <span class="text-2xl leading-none pb-1">&times;</span>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+
+
+                <button 
+                    @click="confirmScore" 
+                    :disabled="modalMode === 'win' && !isValidScore"
+                    class="w-full mt-6 bg-mj-green text-mj-ivory font-bold text-xl py-4 rounded-xl shadow-lg disabled:opacity-50 disabled:cursor-not-allowed active:scale-95 transition-transform"
+                >
+                    {{ modalMode === 'end' ? '确认结算并结束' : '确认结算' }}
+                </button>
+            </div>
+        </div>
+
+        <!-- ================= RESHUFFLE MODAL ================= -->
+        <div v-if="showReshuffleModal" class="fixed inset-0 z-[200] bg-black/80 backdrop-blur-sm flex items-center justify-center p-6 animate-fade-in">
+            <div class="bg-mj-ivory w-full max-w-xs rounded-2xl p-6 shadow-2xl space-y-4 text-center">
+                <div class="text-4xl">🔄</div>
+                <h3 class="text-xl font-bold text-mj-green">重排</h3>
+                <p class="text-gray-600 text-sm whitespace-pre-line">确定重新开始排位吗？
+                积分和历史记录将保留。</p>
+                <div class="flex flex-col space-y-2 pt-2">
+                    <button @click="performReshuffle" class="w-full py-3 bg-mj-gold text-black font-bold rounded-xl active:scale-95 transition-transform">
+                        确认重排
+                    </button>
+                    <button @click="showReshuffleModal = false" class="w-full py-3 bg-gray-200 text-gray-700 font-bold rounded-xl active:scale-95 transition-transform">
+                        取消
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- ================= HARD RESET MODAL ================= -->
+        <div v-if="showHardResetModal" class="fixed inset-0 z-[200] bg-black/80 backdrop-blur-sm flex items-center justify-center p-6 animate-fade-in">
+            <div class="bg-mj-ivory w-full max-w-xs rounded-2xl p-6 shadow-2xl space-y-4 text-center">
+                <div class="text-4xl">🗑️</div>
+                <h3 class="text-xl font-bold text-red-600">彻底重置</h3>
+                <p class="text-gray-600 text-sm whitespace-pre-line">确定要永久删除所有历史记录吗？
+                此操作不可撤销。</p>
+                <div class="flex flex-col space-y-2 pt-2">
+                    <button @click="performHardReset" class="w-full py-3 bg-red-600 text-white font-bold rounded-xl active:scale-95 transition-transform">
+                        确认删除
+                    </button>
+                    <button @click="showHardResetModal = false" class="w-full py-3 bg-gray-200 text-gray-700 font-bold rounded-xl active:scale-95 transition-transform">
+                        取消
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- ================= CUSTOM CONFIRM MODAL (DELETE HISTORY) ================= -->
+        <div v-if="confirmation.show" class="fixed inset-0 z-[200] bg-black/80 backdrop-blur-sm flex items-center justify-center p-6 animate-fade-in">
+            <div class="bg-mj-ivory w-full max-w-xs rounded-2xl p-6 shadow-2xl space-y-4 text-center">
+                <div class="text-4xl">🗑️</div>
+                <h3 class="text-xl font-bold text-mj-green">{{ confirmation.title }}</h3>
+                <p class="text-gray-600 text-sm whitespace-pre-line">{{ confirmation.message }}</p>
+                <div class="flex flex-col space-y-2 pt-2">
+                    <button @click="confirmation.onConfirm" class="w-full py-3 bg-mj-green text-white font-bold rounded-xl active:scale-95 transition-transform">
+                        确认删除
+                    </button>
+                    <button @click="confirmation.show = false" class="w-full py-3 bg-gray-200 text-gray-700 font-bold rounded-xl active:scale-95 transition-transform">
+                        取消
+                    </button>
+                </div>
+            </div>
+        </div>
+        
+        <!-- ================= GAME HISTORY DETAIL MODAL ================= -->
+        <div v-if="selectedGameHistory" class="fixed inset-0 z-[210] bg-black/80 backdrop-blur-sm flex items-center justify-center p-6 animate-fade-in">
+            <div class="bg-mj-ivory w-full max-w-md rounded-2xl p-6 shadow-2xl space-y-4 max-h-[90vh] flex flex-col">
+                <div class="flex justify-between items-center mb-2 shrink-0">
+                    <div class="flex items-center space-x-3">
+                        <button @click="closeGameHistoryDetail" class="text-gray-500 hover:text-gray-800 text-2xl font-black leading-none pb-1">
+                            &lt;
+                        </button>
+                        <h3 class="text-xl font-bold text-mj-green">历史对局详情</h3>
+                    </div>
+                    <button @click="closeGameHistoryDetail" class="text-gray-500 hover:text-gray-800 text-3xl leading-none">&times;</button>
+                </div>
+                
+                <!-- Chart Container -->
+                <div class="w-full bg-black/5 rounded-lg p-2 shrink-0 flex flex-col">
+                    <div class="h-48 relative w-full">
+                         <canvas ref="historyChartRef"></canvas>
+                    </div>
+                </div>
+
+                <div class="space-y-3 text-sm text-gray-700 overflow-y-auto flex-1 pr-2">
+                    <div class="flex justify-between">
+                        <span>时间</span>
+                        <span>{{ formatGameTime(selectedGameHistory.timestamp) }}</span>
+                    </div>
+                    <div class="flex justify-between">
+                        <span>局数</span>
+                        <span>共{{ selectedGameHistory.totalHands }}局</span>
+                    </div>
+                    <div>
+                        <div class="text-sm font-bold text-mj-green mb-1">最终成绩</div>
+                        <div
+                            v-for="name in selectedGameHistory.players"
+                            :key="name"
+                            class="flex justify-between text-sm py-1 border-b border-gray-100 last:border-0"
+                        >
+                            <span class="text-gray-700">{{ name }}</span>
+                            <span
+                                class="font-mono font-bold"
+                                :class="(selectedGameHistory.finalScores[name] || 0) >= 0 ? 'text-mj-red' : 'text-mj-emerald'"
+                            >
+                                {{ (selectedGameHistory.finalScores[name] || 0) > 0 ? '+' : ''}}{{ selectedGameHistory.finalScores[name] || 0 }}
+                            </span>
+                        </div>
+                    </div>
+                    <div>
+                        <div class="text-sm font-bold text-mj-green mb-1">结算说明</div>
+                        <div v-if="selectedGameSettlementDetails.length > 0" class="space-y-1">
+                            <div
+                                v-for="(detail, idx) in selectedGameSettlementDetails"
+                                :key="idx"
+                                class="flex items-center text-sm"
+                            >
+                                <span class="font-bold text-gray-700">{{ detail.name }}</span>
+                                <span class="mx-2 text-gray-500">→</span>
+                                <span class="font-bold text-mj-gold">{{ detail.to }}</span>
+                                <span class="font-mono font-bold text-mj-emerald ml-3">-{{ detail.amount }}</span>
+                            </div>
+                        </div>
+                        <div v-else class="text-xs text-gray-400">
+                            当前无需结算，所有积分已平衡
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+    </div>
+
+    <script>
+        const { createApp, reactive, computed, ref, shallowRef, onMounted, watch, nextTick } = Vue;
+
+        // 创建 Socket.io 客户端实例
+        const socket = io();
+
+        createApp({
+            setup() {
+                const INITIAL_NAMES = ["Nora", "小黄鸡", "杨老师", "张少", "桥派", "空"];
+                const WINDS = ['东', '南', '西', '北'];
+
+                const MAIN_CHART_COLORS = ['#ef4444', '#f59e0b', '#3b82f6', '#d946ef', '#10b981', '#6366f1'];
+                const MODAL_CHART_COLORS = ['#b91c1c', '#f59e0b', '#047857', '#1e40af'];
+
+                const state = reactive({
+                    step: 'setup',
+                    allNames: [...INITIAL_NAMES], 
+                    selectedNames: [],
+                    players: [], 
+                    dealerIdx: 0,
+                    roundWindIdx: 0,
+                    totalHands: 1,
+                    history: [],
+                    playerTotals: {} 
+                });
+
+                const newPlayerName = ref('');
+                const activeTab = ref('chart');
+                const showModal = ref(false);
+                const modalMode = ref('win');
+                
+                const chartInstance = shallowRef(null);
+                const scoreChartRef = ref(null);
+                const endGameChartRef = ref(null);
+                const endGameChartInstance = shallowRef(null);
+                const chartFullscreen = ref(false);
+                
+                const showHistory = ref(false);
+                const selectedGameHistory = ref(null);
+                const historyChartRef = ref(null);
+                const historyChartInstance = shallowRef(null);
+
+                const scoring = reactive({
+                    winnerIdx: -1,
+                    basePoints: 10,
+                    multiplier: 3,
+                    bystanderIndices: [],
+                    nextDealerIdx: 0
+                });
+
+                const showReshuffleModal = ref(false);
+                const showHardResetModal = ref(false);
+
+                const confirmation = reactive({
+                    show: false,
+                    title: '',
+                    message: '',
+                    onConfirm: () => {}
+                });
+
+                const deleteConfirmIdx = ref(-1);
+
+                const reversedHistory = computed(() => [...state.history].reverse());
+
+                const isValidScore = computed(() => {
+                    if (modalMode.value === 'draw') return true;
+                    if (scoring.winnerIdx === -1) return false;
+                    if (!scoring.basePoints || scoring.basePoints <= 0 || !scoring.multiplier || scoring.multiplier <= 0) return false;
+                    const losers = 4 - 1 - scoring.bystanderIndices.length; 
+                    return losers > 0;
+                });
+
+                const activeLoserCount = computed(() => 4 - 1 - scoring.bystanderIndices.length);
+
+                const loserShare = computed(() => {
+                    if (activeLoserCount.value === 0) return 0;
+                    const totalPoints = parseFloat(scoring.basePoints) * parseFloat(scoring.multiplier);
+                    return Math.floor(totalPoints); 
+                });
+                
+                const endGameSettlements = computed(() => {
+                    return state.players.map(p => ({
+                        name: p.name,
+                        amount: state.playerTotals[p.name] || 0
+                    }));
+                 });
+                
+                const buildSettlementDetails = (players, totals) => {
+                    const allDetails = [];
+                    const sortedPlayers = players.map(name => ({
+                        name,
+                        total: totals[name] || 0
+                    })).sort((a, b) => a.total - b.total);
+                    
+                    const receivers = sortedPlayers.filter(p => p.total > 0);
+                    const payers = sortedPlayers.filter(p => p.total < 0).reverse();
+                    
+                    for (const receiver of receivers) {
+                        let remaining = receiver.total;
+                        for (const payer of payers) {
+                            if (payer.total >= 0 || remaining <= 0) continue;
+                            
+                            const payoff = Math.min(Math.abs(payer.total), remaining);
+                            if (payoff > 0) {
+                                allDetails.push({
+                                    name: payer.name,
+                                    amount: payoff,
+                                    type: 'pay',
+                                    to: receiver.name
+                                });
+                                payer.total += payoff;
+                                remaining -= payoff;
+                            }
+                        }
+                    }
+                    
+                    return allDetails;
+                };
+                
+                const endGameSettlementDetails = computed(() => {
+                    const players = state.players.map(p => p.name);
+                    return buildSettlementDetails(players, state.playerTotals);
+                });
+                
+                const selectedGameSettlementDetails = computed(() => {
+                    if (!selectedGameHistory.value) return [];
+                    return buildSettlementDetails(selectedGameHistory.value.players, selectedGameHistory.value.finalScores || {});
+                });
+
+                const addNewPlayer = () => {
+                    const name = newPlayerName.value.trim();
+                    if (!name) return;
+                    if (state.allNames.includes(name)) {
+                        alert("名字已存在");
+                        return;
+                    }
+                    state.allNames.push(name);
+                    newPlayerName.value = '';
+                    saveGame();
+                };
+
+                const togglePlayerSelection = (name) => {
+                    if (state.selectedNames.includes(name)) {
+                        state.selectedNames = state.selectedNames.filter(n => n !== name);
+                    } else if (state.selectedNames.length < 4) {
+                        state.selectedNames.push(name);
+                    }
+                };
+
+                const startGame = () => {
+                    state.players = state.selectedNames.map((name, idx) => {
+                        if (state.playerTotals[name] === undefined) {
+                            state.playerTotals[name] = 0;
+                        }
+                        return {
+                            id: Date.now() + idx,
+                            name: name,
+                            roundScore: 0 // 新一轮积分从0开始
+                        };
+                    });
+                    
+                    state.dealerIdx = 0;
+                    state.roundWindIdx = 0;
+                    state.step = 'playing';
+                    
+                    saveGame();
+                    initWakeLock();
+                    
+                    // 等待 DOM 渲染后初始化图表
+                    nextTick(() => {
+                        setTimeout(initChart, 300);
+                    });
+                };
+
+                const triggerResetToSetup = () => {
+                    showReshuffleModal.value = true;
+                };
+                
+                const performReshuffle = () => {
+                    state.step = 'setup';
+                    showReshuffleModal.value = false;
+                };
+
+                const confirmHardReset = () => {
+                    showHardResetModal.value = true;
+                };
+                
+                const performHardReset = () => {
+                    localStorage.removeItem('mj_gamestate');
+                    localStorage.removeItem('mj_game_history');
+                    location.reload();
+                };
+
+                const restoreGame = () => {
+                    const saved = localStorage.getItem('mj_gamestate');
+                    if (saved) {
+                        try {
+                            const parsed = JSON.parse(saved);
+                            Object.assign(state, parsed);
+                            if (!state.playerTotals) state.playerTotals = {};
+                            if (!state.allNames) state.allNames = [...INITIAL_NAMES];
+                            initWakeLock();
+                            if (state.step === 'playing') {
+                                nextTick(() => {
+                                    setTimeout(initChart, 300);
+                                });
+                            }
+                        } catch(e) {
+                            console.error("Failed to restore game", e);
+                        }
+                    }
+                };
+
+                const getSeatWind = (playerIdx) => {
+                    const diff = (playerIdx - state.dealerIdx + 4) % 4;
+                    return WINDS[diff];
+                };
+                
+                const toggleRoundWind = () => {
+                    state.roundWindIdx = (state.roundWindIdx + 1) % 4;
+                    saveGame();
+                };
+                
+                const getPlayerName = (idx) => state.players[idx] ? state.players[idx].name : '';
+
+                const toggleBystander = (idx) => {
+                    if (idx === scoring.winnerIdx) return;
+                    if (scoring.bystanderIndices.includes(idx)) {
+                        scoring.bystanderIndices = scoring.bystanderIndices.filter(i => i !== idx);
+                    } else {
+                        scoring.bystanderIndices.push(idx);
+                    }
+                };
+
+                const toggleChartFullscreen = () => {
+                    chartFullscreen.value = !chartFullscreen.value;
+                    const chartContainer = endGameChartRef.value?.parentElement;
+                    const viewport = window.visualViewport;
+                    const viewportWidth = viewport?.width || window.innerWidth;
+                    const viewportHeight = viewport?.height || window.innerHeight;
+                    const isPortrait = viewportHeight >= viewportWidth;
+
+                    if (chartFullscreen.value) {
+                        if (chartContainer) {
+                            chartContainer.style.position = 'fixed';
+                            chartContainer.style.top = '0';
+                            chartContainer.style.left = '0';
+                            chartContainer.style.zIndex = '1000';
+                            chartContainer.style.backgroundColor = '#fff';
+                            chartContainer.style.paddingTop = 'calc(10px + env(safe-area-inset-top))';
+                            chartContainer.style.paddingRight = 'calc(10px + env(safe-area-inset-right))';
+                            chartContainer.style.paddingBottom = 'calc(10px + env(safe-area-inset-bottom))';
+                            chartContainer.style.paddingLeft = 'calc(10px + env(safe-area-inset-left))';
+
+                            if (isPortrait) {
+                                chartContainer.style.width = `${viewportHeight}px`;
+                                chartContainer.style.height = `${viewportWidth}px`;
+                                chartContainer.style.transform = 'rotate(90deg)';
+                                chartContainer.style.transformOrigin = 'top left';
+                                chartContainer.style.left = `${viewportWidth}px`;
+                            } else {
+                                chartContainer.style.width = `${viewportWidth}px`;
+                                chartContainer.style.height = `${viewportHeight}px`;
+                                chartContainer.style.transform = '';
+                                chartContainer.style.transformOrigin = '';
+                            }
+
+                            nextTick(() => {
+                                if (endGameChartInstance.value) {
+                                    endGameChartInstance.value.resize();
+                                }
+                            });
+                        }
+                    } else {
+                        if (chartContainer) {
+                            chartContainer.style.position = '';
+                            chartContainer.style.top = '';
+                            chartContainer.style.left = '';
+                            chartContainer.style.width = '';
+                            chartContainer.style.height = '';
+                            chartContainer.style.zIndex = '';
+                            chartContainer.style.transform = '';
+                            chartContainer.style.transformOrigin = '';
+                            chartContainer.style.backgroundColor = '';
+                            chartContainer.style.paddingTop = '';
+                            chartContainer.style.paddingRight = '';
+                            chartContainer.style.paddingBottom = '';
+                            chartContainer.style.paddingLeft = '';
+
+                            nextTick(() => {
+                                if (endGameChartInstance.value) {
+                                    endGameChartInstance.value.resize();
+                                }
+                            });
+                        }
+                    }
+                };
+
+                const initEndGameChart = () => {
+                    if (!endGameChartRef.value) return;
+                    
+                    if (endGameChartInstance.value) {
+                        endGameChartInstance.value.destroy();
+                    }
+                    
+                    const ctx = endGameChartRef.value.getContext('2d');
+                    endGameChartInstance.value = new Chart(ctx, {
+                        type: 'line',
+                        data: {
+                            labels: [],
+                            datasets: []
+                        },
+                        options: {
+                            responsive: true,
+                            maintainAspectRatio: false,
+                            interaction: { mode: 'index', intersect: false },
+                            plugins: {
+                                legend: {
+                                    display: true,
+                                    position: 'top',
+                                    align: 'center',
+                                    labels: {
+                                        usePointStyle: true,
+                                        boxWidth: 8,
+                                        font: {
+                                            size: 11,
+                                            color: '#000000'
+                                        },
+                                        color: '#000000'
+                                    }
+                                },
+                                title: {
+                                    display: false
+                                }
+                            },
+                            scales: {
+                                y: {
+                                    beginAtZero: true,
+                                    grid: {
+                                        color: 'rgba(0, 0, 0, 0.1)'
+                                    },
+                                    title: {
+                                        display: true,
+                                        text: '累计分数',
+                                        color: '#000000',
+                                        font: { size: 12, weight: 'bold' }
+                                    },
+                                    ticks: {
+                                        color: '#000000',
+                                        size: 10
+                                    }
+                                },
+                                x: {
+                                    grid: {
+                                        display: false
+                                    },
+                                    title: {
+                                        display: true,
+                                        text: '局数',
+                                        color: '#000000',
+                                        font: { size: 12, weight: 'bold' }
+                                    },
+                                    ticks: {
+                                        color: '#000000',
+                                        size: 10
+                                    }
+                                }
+                            }
+                        }
+                    });
+                    
+                    updateEndGameChart();
+                };
+
+                const updateEndGameChart = () => {
+                    if (!endGameChartInstance.value) return;
+                    
+                    const labels = state.history.map(log => `第${log.hand}局`);
+                    const datasets = state.players.map((player, idx) => {
+                        const colors = ['#b91c1c', '#f59e0b', '#047857', '#1e40af'];
+                        const color = colors[idx % colors.length];
+                        
+                        return {
+                            label: player.name,
+                            data: state.history.map(log => log.totalsSnapshot[player.name] || 0),
+                            borderColor: color,
+                            backgroundColor: color + '20',
+                            tension: 0.3,
+                            fill: false
+                        };
+                    });
+                    
+                    endGameChartInstance.value.data.labels = labels;
+                    endGameChartInstance.value.data.datasets = datasets;
+                    endGameChartInstance.value.update();
+                };
+
+                const openScoringModal = (mode) => {
+                    modalMode.value = mode;
+                    if (mode === 'end') {
+                        scoring.basePoints = 0;
+                        scoring.multiplier = 0;
+                    } else {
+                        scoring.basePoints = 10;
+                        scoring.multiplier = 3;
+                    }
+                    scoring.bystanderIndices = [];
+                    scoring.winnerIdx = -1;
+                    scoring.nextDealerIdx = state.dealerIdx;
+                    showModal.value = true;
+                    
+                    if (mode === 'end') {
+                        nextTick(() => {
+                            setTimeout(initEndGameChart, 300);
+                        });
+                    }
+                };
+
+                watch(() => scoring.winnerIdx, (newVal) => {
+                    if (modalMode.value === 'win' && newVal !== -1) {
+                        scoring.nextDealerIdx = (newVal === state.dealerIdx) ? state.dealerIdx : (state.dealerIdx + 1) % 4;
+                    }
+                });
+
+                const confirmScore = () => {
+                    const isWin = modalMode.value === 'win';
+                    const isEnd = modalMode.value === 'end';
+                    let logDetail = '';
+                    let winnerName = '';
+                    let winPoints = 0;
+
+                    if (isWin) {
+                        const winner = state.players[scoring.winnerIdx];
+                        const share = parseInt(loserShare.value);
+                        const count = activeLoserCount.value;
+                        const actualTotalWin = share * count;
+
+                        winnerName = winner.name;
+                        winPoints = actualTotalWin;
+
+                        state.players.forEach((p, idx) => {
+                            if (idx === scoring.winnerIdx) {
+                                p.roundScore += actualTotalWin;
+                                state.playerTotals[p.name] += actualTotalWin;
+                            } else if (!scoring.bystanderIndices.includes(idx)) {
+                                p.roundScore -= share;
+                                state.playerTotals[p.name] -= share;
+                            }
+                        });
+
+                        const loserNames = state.players
+                            .filter((_, i) => i !== scoring.winnerIdx && !scoring.bystanderIndices.includes(i))
+                            .map(p => p.name).join(',');
+                        logDetail = `输家: ${loserNames} (每人-${share})`;
+                    } else if (isEnd) {
+                        const settlements = [];
+                        const sortedPlayers = state.players.map(p => ({
+                            name: p.name,
+                            total: state.playerTotals[p.name] || 0
+                        })).sort((a, b) => a.total - b.total);
+                        
+                        const receivers = sortedPlayers.filter(p => p.total > 0);
+                        const payers = sortedPlayers.filter(p => p.total < 0).reverse();
+                        
+                        for (const receiver of receivers) {
+                            let remaining = receiver.total;
+                            for (const payer of payers) {
+                                if (payer.total >= 0 || remaining <= 0) continue;
+                                
+                                const payoff = Math.min(Math.abs(payer.total), remaining);
+                                if (payoff > 0) {
+                                    settlements.push(`${payer.name}-${receiver.name}:${payoff}`);
+                                    // state.playerTotals[payer.name] += payoff; // 移除：结束对局时不应修改实际分数
+                                    // state.playerTotals[receiver.name] -= payoff; // 移除：结束对局时不应修改实际分数
+                                    payer.total += payoff;
+                                    remaining -= payoff;
+                                }
+                            }
+                        }
+                        
+                        if (settlements.length > 0) {
+                            logDetail = `结算: ${settlements.join(', ')}`;
+                        } else {
+                            logDetail = "无需结算";
+                        }
+                    } else {
+                        logDetail = "流局 - 积分无变动";
+                    }
+
+                    state.history.push({
+                        hand: state.totalHands,
+                        type: isWin ? 'win' : (isEnd ? 'end' : 'draw'),
+                        winner: winnerName,
+                        points: winPoints,
+                        detail: logDetail,
+                        totalsSnapshot: { ...state.playerTotals }
+                    });
+
+                    state.totalHands++;
+                    const prevDealer = state.dealerIdx;
+                    state.dealerIdx = scoring.nextDealerIdx;
+                    if (prevDealer === 3 && state.dealerIdx === 0) {
+                        state.roundWindIdx = (state.roundWindIdx + 1) % 4;
+                    }
+
+                    saveGame();
+                    closeModal();
+                    
+                    // 更新图表数据
+                    nextTick(() => {
+                        updateChart();
+                    });
+                    
+                    // 如果是结束对局，保存历史记录并返回首页
+                    if (isEnd) {
+                        nextTick(() => {
+                            // 保存历史游戏记录
+                            saveGameHistory();
+                            
+                            // 返回首页但不重置所有状态
+                            state.step = 'setup';
+                            // 只重置必要的状态
+                            state.selectedNames = [];
+                            state.players = [];
+                            state.dealerIdx = 0;
+                            state.roundWindIdx = 0;
+                            state.totalHands = 1;
+                            state.history = [];
+                            state.playerTotals = {};
+                            // 清除当前游戏状态，但保留历史记录
+                            localStorage.removeItem('mj_gamestate');
+                        });
+                    }
+                };
+
+                const closeModal = () => showModal.value = false;
+                const saveGame = () => {
+                    localStorage.setItem('mj_gamestate', JSON.stringify(state));
+                    // 将游戏状态发送到服务器
+                    socket.emit('updateGameState', state);
+                };
+                
+                const saveGameHistory = () => {
+                    // 创建历史游戏记录
+                    const gameHistory = {
+                        id: Date.now(),
+                        timestamp: new Date().toISOString(),
+                        players: state.players.filter(p => p && p.name).map(p => p.name),
+                        totalHands: state.totalHands - 1, // 减去最后一局的增量
+                        history: [...state.history],
+                        finalScores: { ...state.playerTotals },
+                        winner: Object.entries(state.playerTotals).sort((a, b) => b[1] - a[1])[0]?.[0] || '无'
+                    };
+                    
+                    // 获取现有历史记录
+                    const historyList = JSON.parse(localStorage.getItem('mj_game_history') || '[]');
+                    
+                    // 添加新记录
+                    historyList.unshift(gameHistory);
+                    
+                    // 限制历史记录数量（最多保存10条）
+                    if (historyList.length > 10) {
+                        historyList.splice(10);
+                    }
+                    
+                    // 保存历史记录
+                    localStorage.setItem('mj_game_history', JSON.stringify(historyList));
+                };
+                
+
+                const loadGameHistory = () => {
+                    return JSON.parse(localStorage.getItem('mj_game_history') || '[]');
+                };
+                
+                const formatGameTime = (timestamp) => {
+                    const date = new Date(timestamp);
+                    return `${date.getMonth() + 1}/${date.getDate()} ${date.getHours().toString().padStart(2, '0')}:${date.getMinutes().toString().padStart(2, '0')}`;
+                };
+                
+                const gameHistoryList = computed(() => {
+                    return loadGameHistory();
+                });
+                
+                const initHistoryChart = (game) => {
+                    if (!historyChartRef.value) return;
+                    if (historyChartInstance.value) historyChartInstance.value.destroy();
+
+                    const ctx = historyChartRef.value.getContext('2d');
+                    historyChartInstance.value = new Chart(ctx, {
+                        type: 'line',
+                        data: {
+                            labels: game.history.map(log => `第${log.hand}局`),
+                            datasets: game.players.map((playerName, idx) => {
+                                const colors = ['#b91c1c', '#f59e0b', '#047857', '#1e40af'];
+                                const color = colors[idx % colors.length];
+                                
+                                return {
+                                    label: playerName,
+                                    data: game.history.map(log => (log.totalsSnapshot && log.totalsSnapshot[playerName]) || 0),
+                                    borderColor: color,
+                                    backgroundColor: color + '20',
+                                    tension: 0.3,
+                                    fill: false,
+                                    pointRadius: 2
+                                };
+                            })
+                        },
+                        options: {
+                            responsive: true,
+                            maintainAspectRatio: false,
+                            interaction: { mode: 'index', intersect: false },
+                            plugins: {
+                                legend: {
+                                    display: true,
+                                    position: 'top',
+                                    align: 'center',
+                                    labels: {
+                                        usePointStyle: true,
+                                        boxWidth: 8,
+                                        font: {
+                                            size: 11,
+                                            color: '#ffffff'
+                                        },
+                                        color: '#ffffff'
+                                    }
+                                },
+                                title: { display: false }
+                            },
+                            scales: {
+                                y: {
+                                    beginAtZero: true,
+                                    grid: { color: 'rgba(255, 255, 255, 0.1)' },
+                                    title: {
+                                        display: true,
+                                        text: '累计分数',
+                                        color: '#ffffff',
+                                        font: { size: 12, weight: 'bold' }
+                                    },
+                                    ticks: { 
+                                        font: { size: 10 },
+                                        color: '#ffffff'
+                                    }
+                                },
+                                x: {
+                                    grid: { display: false },
+                                    title: {
+                                        display: true,
+                                        text: '局数',
+                                        color: '#ffffff',
+                                        font: { size: 12, weight: 'bold' }
+                                    },
+                                    ticks: { 
+                                        display: false,
+                                        color: '#ffffff'
+                                    }
+                                }
+                            }
+                        }
+                    });
+                };
+
+                const openGameHistoryDetail = (game) => {
+                    selectedGameHistory.value = game;
+                    nextTick(() => {
+                        initHistoryChart(game);
+                    });
+                };
+                
+                const closeGameHistoryDetail = () => {
+                    selectedGameHistory.value = null;
+                    if (historyChartInstance.value) {
+                        historyChartInstance.value.destroy();
+                        historyChartInstance.value = null;
+                    }
+                };
+
+                // 监听服务器发送的游戏状态更新
+                socket.on('gameState', (newState) => {
+                    // 只有当新状态与当前状态不同时才更新
+                    if (JSON.stringify(newState) !== JSON.stringify(state)) {
+                        console.log('接收服务器游戏状态更新');
+                        // 更新本地状态
+                        Object.assign(state, newState);
+                        // 保存到本地存储
+                        localStorage.setItem('mj_gamestate', JSON.stringify(state));
+                        // 更新图表
+                        nextTick(() => {
+                            updateChart();
+                        });
+                    }
+                });
+
+                // 初始化 Chart.js
+                const initChart = () => {
+                    if (!scoreChartRef.value) return;
+                    const ctx = scoreChartRef.value.getContext('2d');
+                    
+                    const labels = [0, ...state.history.map(h => h.hand)];
+                    const datasets = state.selectedNames.map((name, pIdx) => {
+                        const dataPoints = [0]; 
+                        state.history.forEach(h => {
+                            dataPoints.push(h.totalsSnapshot[name] || dataPoints[dataPoints.length - 1] || 0);
+                        });
+
+                        const colors = ['#ef4444', '#f59e0b', '#3b82f6', '#d946ef', '#10b981', '#6366f1']; 
+                        return {
+                            label: name,
+                            data: dataPoints,
+                            borderColor: colors[pIdx % colors.length],
+                            backgroundColor: colors[pIdx % colors.length] + '44', // Semi-transparent
+                            borderWidth: 3,
+                            pointRadius: 2, // 标记点减小 50% (从 4 修改为 2)
+                            pointBackgroundColor: colors[pIdx % colors.length],
+                            tension: 0.1,
+                            fill: false
+                        };
+                    });
+
+                    if (chartInstance.value) {
+                        chartInstance.value.destroy();
+                    }
+
+                    chartInstance.value = new Chart(ctx, {
+                        type: 'line',
+                        data: { labels, datasets },
+                        options: {
+                            responsive: true,
+                            maintainAspectRatio: false,
+                            interaction: { mode: 'index', intersect: false },
+                            plugins: {
+                                legend: {
+                                    display: true,
+                                    position: 'top',
+                                    align: 'center',
+                                    labels: {
+                                        usePointStyle: true,
+                                        boxWidth: 8,
+                                        font: {
+                                            size: 11,
+                                            color: '#ffffff'
+                                        },
+                                        color: '#ffffff'
+                                    }
+                                }
+                            },
+                            scales: {
+                                x: { 
+                                    title: { display: true, text: '局数', color: '#ffffff', font: { size: 12, weight: 'bold' } },
+                                    ticks: { color: '#ffffff', size: 10 }, 
+                                    grid: { color: 'rgba(255,255,255,0.1)' } 
+                                },
+                                y: { 
+                                    title: { display: true, text: '累计分数', color: '#ffffff', font: { size: 12, weight: 'bold' } },
+                                    ticks: { color: '#ffffff', size: 10 }, 
+                                    grid: { color: 'rgba(255,255,255,0.1)' } 
+                                }
+                            }
+                        }
+                    });
+                };
+
+                // 更新 Chart.js
+                const updateChart = () => {
+                    if (!chartInstance.value) {
+                        initChart();
+                        return;
+                    }
+                    const labels = [0, ...state.history.map(h => h.hand)];
+                    chartInstance.value.data.labels = labels;
+                    chartInstance.value.data.datasets.forEach(dataset => {
+                        const name = dataset.label;
+                        const dataPoints = [0];
+                        state.history.forEach(h => {
+                            dataPoints.push(h.totalsSnapshot[name] !== undefined ? h.totalsSnapshot[name] : (dataPoints[dataPoints.length - 1] || 0));
+                        });
+                        dataset.data = dataPoints;
+                    });
+                    chartInstance.value.update('none'); // Update without full animation for smoothness
+                };
+
+                // 监听标签页切换，解决 Canvas 尺寸塌陷问题
+                watch(activeTab, (newVal) => {
+                    if (newVal === 'chart') {
+                        nextTick(() => {
+                            setTimeout(() => {
+                                if (chartInstance.value) {
+                                    chartInstance.value.resize();
+                                    updateChart();
+                                } else {
+                                    initChart();
+                                }
+                            }, 100);
+                        });
+                    }
+                });
+
+                const startDelete = (reversedIdx) => {
+                    deleteConfirmIdx.value = reversedIdx;
+                };
+
+                const confirmDelete = (reversedIdx) => {
+                    const actualIdx = state.history.length - 1 - reversedIdx;
+                    deleteHistory(actualIdx);
+                    deleteConfirmIdx.value = -1;
+                };
+
+                const confirmDeleteHistory = (reversedIdx) => {
+                    const actualIdx = state.history.length - 1 - reversedIdx;
+                    const log = state.history[actualIdx];
+                    showModal.value = false; // 关闭计分模态框
+                    confirmation.title = "删除记录";
+                    confirmation.message = `确定要删除第 ${log.hand} 局的记录吗？\n此操作将回退相关积分数据。`;
+                    confirmation.onConfirm = () => {
+                        deleteHistory(actualIdx);
+                        confirmation.show = false;
+                    };
+                    confirmation.show = true;
+                };
+
+                const deleteHistory = (idx) => {
+                    const deletedLog = state.history[idx];
+                    
+                    // 计算被删除那局的积分变化
+                    let deletedRoundChanges = {};
+                    if (idx > 0) {
+                        const beforeLog = state.history[idx - 1];
+                        Object.keys(deletedLog.totalsSnapshot).forEach(name => {
+                            const beforeTotal = beforeLog.totalsSnapshot[name] || 0;
+                            const afterTotal = deletedLog.totalsSnapshot[name] || 0;
+                            deletedRoundChanges[name] = afterTotal - beforeTotal;
+                        });
+                    } else {
+                        // 删除第一局，积分变化就是第一局的积分
+                        Object.keys(deletedLog.totalsSnapshot).forEach(name => {
+                            deletedRoundChanges[name] = deletedLog.totalsSnapshot[name] || 0;
+                        });
+                    }
+                    
+                    state.history.splice(idx, 1);
+                    
+                    // 回退数据
+                    if (idx === state.history.length) {
+                        // 删除的是最后一条记录，回退到前一条记录的状态
+                        if (state.history.length > 0) {
+                            const prevLog = state.history[state.history.length - 1];
+                            Object.assign(state.playerTotals, prevLog.totalsSnapshot);
+                            state.totalHands = prevLog.hand + 1;
+                        } else {
+                            // 没有历史记录了，重置所有数据
+                            Object.keys(state.playerTotals).forEach(name => {
+                                state.playerTotals[name] = 0;
+                            });
+                            state.totalHands = 1;
+                        }
+                    } else {
+                        // 删除的不是最后一条记录，需要重新计算所有后续记录
+                        recalculateHistoryData();
+                    }
+                    
+                    // 更新玩家当前分数：减去被删除那局的积分变化
+                    state.players.forEach(player => {
+                        if (deletedRoundChanges[player.name] !== undefined) {
+                            player.roundScore -= deletedRoundChanges[player.name];
+                        }
+                    });
+                    
+                    saveGame();
+                    updateChart();
+                };
+
+                const recalculateHistoryData = () => {
+                    // 重置所有玩家的总分数
+                    Object.keys(state.playerTotals).forEach(name => {
+                        state.playerTotals[name] = 0;
+                    });
+                    
+                    // 重新计算所有历史记录
+                    state.history.forEach((log, idx) => {
+                        Object.assign(state.playerTotals, log.totalsSnapshot);
+                        log.hand = idx + 1;
+                    });
+                    
+                    state.totalHands = state.history.length + 1;
+                };
+
+                const initWakeLock = async () => {
+                    if ('wakeLock' in navigator) {
+                        try {
+                            let wakeLock = await navigator.wakeLock.request('screen');
+                            document.addEventListener('visibilitychange', async () => {
+                                if (wakeLock !== null && document.visibilityState === 'visible') {
+                                    wakeLock = await navigator.wakeLock.request('screen');
+                                }
+                            });
+                        } catch (err) {}
+                    }
+                };
+
+                onMounted(() => {
+                    restoreGame();
+                });
+
+
+
+
+                return {
+                    state,
+                    newPlayerName,
+                    addNewPlayer,
+                    windChar: WINDS,
+                    togglePlayerSelection,
+                    startGame,
+                    triggerResetToSetup,
+                    confirmHardReset,
+                    restoreGame,
+                    getSeatWind,
+                    toggleRoundWind,
+                    activeTab,
+                    showModal,
+                    modalMode,
+                    openScoringModal,
+                    closeModal,
+                    scoring,
+                    toggleBystander,
+                    isValidScore,
+                    activeLoserCount,
+                    loserShare,
+                    confirmScore,
+                    getPlayerName,
+                    reversedHistory,
+                    scoreChartRef,
+                    endGameChartRef,
+                    showReshuffleModal,
+                    performReshuffle,
+                    showHardResetModal,
+                    performHardReset,
+                    confirmation,
+                    confirmDeleteHistory,
+                    startDelete,
+                    confirmDelete,
+                    deleteConfirmIdx,
+                    endGameSettlements,
+                    endGameSettlementDetails,
+                    toggleChartFullscreen,
+                    chartFullscreen,
+                    showHistory,
+                    selectedGameHistory,
+                    historyChartRef,
+                    selectedGameSettlementDetails,
+                    openGameHistoryDetail,
+                    closeGameHistoryDetail,
+                    gameHistoryList,
+                    formatGameTime,
+                    MAIN_CHART_COLORS,
+                    MODAL_CHART_COLORS
+                };
+
+
+
+            }
+        }).mount('#app');
+    </script>
+</body>
+</html>
