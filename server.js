@@ -32,7 +32,7 @@ app.use(cors());
 
 // 根路径返回 HTML 文件
 app.get('/', (req, res) => {
-  res.sendFile(path.join(__dirname, '麻神理工 (1).html'));
+  res.sendFile(path.join(__dirname, 'index.html'));
 });
 
 // Socket.io 连接处理
